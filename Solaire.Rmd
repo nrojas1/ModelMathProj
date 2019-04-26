@@ -1,0 +1,257 @@
+---
+title: "Préparation au projet en Informatique ou Méthodes Mathématiques (SA 2018)"
+author: "Nicolas Rojas"
+date: "19/12/2018"
+output:
+  html_document:
+    df_print: paged
+runtime: shiny
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r Setup1, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Setup2, echo = FALSE}
+#options(encoding = "ISO-8859-1")
+library(tidyverse)
+#setwd('/Users/claudiauribe/Downloads/NRojas_Rstudio')
+
+```
+
+## Projets d'analyse de données avec R
+### Potentiel d'énergie solaire des communes suisses (2018)
+
+
+### 1. Contexte
+Pour ce projet on s'intéresse au potentiel d'énergie solaire des communes suisses. C'est un jeu de donnée basée sur l'application interactive https://toitsolaire.ch qui renseigne de manière simple sur les quantités d'électricité et de chaleur qui pourraient être produites sur le toit d'un bâtiment. L'Office fédéral de l'énergie (**OFEN**) calcule le potentiel global par commune pour la production d'électricité et de chaleur. Il y a deux scénarios. Dans le premier tous les toits sont exploités uniquement pour produire de l'électricité; dans le second, seules les parties les plus appropriées des toitures sont utilisés pour la production de chaleur et le reste est utilisées pour produire de l'électricité.  
+\n
+Avec ce travail on veut savoir quelle est la répartition géographique de ces indicateurs ainsi que d'essayer de trouver quels sont les communes les plus intéressantes en matière de potentiel énergétique comme si on allait proposer un projet qui met en lien une commune et une entreprise photovoltaïque.
+
+#### 1.1 Données
+Le jeu de donnée provient de open data swiss et peut ce trouver
+ici:  https://opendata.swiss/fr/dataset/solarenergiepotenziale-der-schweizer-gemeinden  
+Le fichier disponible peut être téléchargé soit en format \*.xls ou en \*.json. Pour ce projet
+le .xls est utilisé.  
+
+#### 1.2 Modification des données
+Le fichier `Solarenergiepotenziale_der_Schweizer_Gemeinden_20180926.xlsx` est ouvert avec
+Excel et ensuite sauvegardé sous format "Texte (séparateur: tabulation) (*.txt)". 
+C'est donc ce fichier qui est importé et utilisé dans la suite de l'exercice.
+  
+### 2. `Solaire`
+```{r DataIn, echo=TRUE}
+solaire <- read_tsv("Solarenergiepotenziale_der_Schweizer_Gemeinden_20180926.txt", col_names = T, col_types = list(
+  MunicipalityNumber = col_integer(),
+  MunicipalityName = col_character(),
+  Canton = col_factor(c("AG","AI","AR","BE","BL","BS","FR","GE","GL",
+                        "GR","JU","LU","NE","NW","OW","SG","SH","SO",
+                        "SZ","TG","TI","UR","VD","VS","ZG","ZH")),
+  Scenario1PotentialSolarElectricity = col_double(),
+  Scenario2PotentialSolarElectricity = col_double(),
+  Scenario2PotentialSolarHeat = col_double()),
+  locale = locale(encoding = 'ISO-8859-1'))
+```
+
+On importe les données en lui précisant les 'types' des colonnes avec `col_types`. On spécifie les niveaux de facteur pour la colonne `Canton`. On spécifie aussi l'encodage du fichier parceque les Suisses aiment les noms contenant des *ö*, *ü*, etc.
+
+```{r ViewDat, echo=TRUE}
+print(head(solaire))
+```
+
+On visualise rapidement les données et on remarque que les noms des colonnes sont très longs. On va les modifier.
+
+```{r SetNames}
+colnames(solaire) <- c("ID","NomCommune", "Canton", "Scenario1Electr", "Scenario2Electr", "Scenario2Chaleur")
+```
+
+  
+#### 2.1 Exploration
+```{r QuickView}
+summary(solaire[,4:6])
+```
+
+On remarque que `Scenario1Electr > Scenario2Electr > Scenario2Chaleur` dans l'ensemble du jeu.
+Cela est tout à fait cohérent avec la définition dans 1. Contexte.
+
+À l'aide d'un boxplot on peut voir cette diminution graphiquement. Pour ce faire il faut premièrement rendre le jeu de donnée *tidy*.  
+
+#### 2.2 Tidy
+```{r Tidying}
+solaire.g <- 
+  solaire %>%
+    gather(`Scenario1Electr`,`Scenario2Electr`,`Scenario2Chaleur`, key = "Variable", value = "Indicateur")
+
+print(head(solaire.g))
+```
+
+Il y juste un souci car la colonne `Variable` est de classe caractère (*`<chr>`*) alors qu'on veut qu'elle soit de classe facteur (*`<fct>`*).
+
+```{r MoreTidy}
+solaire.g <-
+  solaire.g %>% 
+    mutate(Variable = as.factor(Variable))
+
+print(head(solaire.g))
+```
+
+#### 2.3 Boxplot
+```{r Boxplot1}
+
+ggplot(solaire.g, aes(Variable, Indicateur, fill = Variable)) + 
+  geom_boxplot() +
+  guides(fill = FALSE)
+
+```
+
+On remarque une grande quantité de valeurs abérrantes qui rendent la lecture du graphique compliqué. Leur présence est due au fait que certaines communes ont un potentiel énergétique largement supérieur au reste de la Suisse.  Afin d'expliquer cela, on pourrait dire que les communes qui ont un nombre plus élevé de bâtiments auront par défaut un potentiel énergétique supérieur. Il est évident que le maximum de chaque scénario est la même commune. Des idées?
+
+```{r SelectingData}
+
+top_aber <-  solaire.g %>% 
+  group_by(Variable) %>% 
+    top_n(n = 1)
+
+print(top_aber)
+```
+
+En contraste, il est impossible qu'une commune n'aille aucun toit et donc aille la valeur de zéro pour l'indicateur `Scenario1Electr`. Par contre, une valeur de zéro est bien possible pour `Scenario2Chaleur` car seulement les toits qui ne peuvent pas être utilisé pour la production d'électricité entrent dans cette catégorie. La valeur de zéro dans ce cas signifie que tous les toits peuvent théoriquement être utilisés pour la production d'électricité comme c'est le cas pour:
+
+```{r SelectingData2}
+
+lows <- solaire.g %>% 
+  group_by(Variable) %>%
+    slice(which.min(Indicateur))
+
+print(lows)
+```
+
+On note que pour les deux autres scénarios il n'y a pas de valeur `0`.
+
+Regardons de plus prés ce qui représente la majorité des communes Suisse (on exclut les valeurs aberrantes).
+
+```{r Boxplot2}
+
+ggplot(solaire.g, aes(Variable, Indicateur, fill = Variable)) + 
+  geom_boxplot(outlier.shape = NA) + 
+  coord_cartesian(ylim = c(0, 60)) +
+  guides(fill = FALSE)
+
+```
+
+Maintenant qu'on sait un peu près comment est distribuer chaque scénario on peut s'intéresser à comment chaque canton s'en sort avec les différents scénarios.
+
+```{r, echo=FALSE, InlineApp}
+library(shiny)
+
+shinyApp(
+  
+  ui <- fluidPage(
+    
+    # Application title
+    titlePanel("Solaire"),
+    
+    # Sidebar with a slider input and output def
+    sidebarLayout(
+      
+      # Sidebar pane for inputs
+      sidebarPanel(
+        
+        # Input: Selector for choosing solaire variable
+        selectInput("dataset",
+                    "Scenario", 
+                    c("Scenario1Electr",
+                      "Scenario2Electr",
+                      "Scenario2Chaleur")),
+        
+        # Input: Check for whether outliers should be included 
+        checkboxInput("outliers", "Afficher Valeurs Aberrantes", TRUE),
+        
+        # Input: Simple integer interval ----
+         sliderInput("ylim", "Limite axe-Y:",
+                  min = 50, max = 900,
+                  value = 275),
+        
+        # Input: Checkbox for choosing which Canton to view in plot
+        checkboxGroupInput("choix",
+            "Sélectionnez certains cantons",
+            choices = c("AG", "AI", "AR", "BE", "BL", "BS",
+                        "FR", "GE", "GL", "GR", "JU", "LU",
+                        "NE", "NW", "OW", "SG", "SH", "SO",
+                        "SZ", "TG", "TI", "UR", "VD", "VS", "ZG", "ZH"),
+            selected = c("GE", "VD", "ZH", "VS", "GL"))
+      ),
+      
+      # Main panel for outputs
+      mainPanel(
+        
+        # Output: Box plot
+        plotOutput("boxPlot")
+      )
+    )
+  ),
+  
+  # Define server logic required to draw a boxplot
+  server <- function(input, output) {
+    
+    output$boxPlot <- renderPlot({
+      
+      # If condition to either display or not the outliers
+      if (input$outliers == FALSE)
+        presence = NA
+      else
+        presence = 1
+      
+      # Gather data clicked options from panel into a vecto
+      checkbox <- c(input$choix)
+      
+      # Select the lines from data solaire who's Cantons are in checkbox
+      selected <- filter(solaire.g, Canton %in% checkbox)
+      
+      # Get variable from selectInput in selected
+      inputSet <- filter(selected, Variable %in% input$dataset)
+      
+      # Create boxplot
+      ggplot(inputSet, aes(Canton, Indicateur, fill = Canton)) +
+        geom_boxplot(outlier.shape = presence) +
+        coord_cartesian(ylim = c(0, input$ylim)) +
+        guides(fill = FALSE)
+      
+    })
+    
+  },
+  
+  options = list(
+    width = "100%", height = 1050)
+)
+
+```
+
+Dans les cantons ayant un bas potentiel on retrouve Uri (UR) et Bâle-Campagne (BL). BL est plus étendu dans les valeurs de potentiel solaire de ses communes mais UR a une médiane plus basse. Il serait donc peu raisonnable de faire un grand investissement pour le développement d'énergie solaire dans ces cantons car ils ont un potentiel bas.  
+\n
+Par ailleurs, Glaris (GL) est de loin le canton le plus intéressant en matière de potentiel solaire suisse. Au sein de ses communes, les valeurs d'indicateurs restent élevé (indiqué par le box plot état plus haut que le reste) et donc il emporte le prix de la plus haute médiane Suisse.  
+\n
+En matière de variation on remarque qu'il y a deux extremes. D'une part les cantons ayant des communes qui se ressemblent beaucoup dans leur potentiel solaire comme Appenzell Rhodes-Intérieures (AI), Nidwald (NW) ou encore UR et qui ont une petite variation. D'autre part on retrouve des cantons comme Bâle-Ville (BS), Genève (GE) et Zoug (ZG) qui possède des communes dont le potentiel solaire à tendance a beaucoup varier.
+\n
+En prenant compte des valeurs aberrantes il est évident que Zurich (ZH) gagne toute manche avec l'immense potentiel qui se trouve dans la ville. Il est aussi évident que Berne (BE), Vaud (VD) et GE ont des communes avec bons résultats et devrait donc être étudié de plus prés.
+
+```{r FinSelec}
+
+finsel <- solaire.g %>%
+  filter(Variable == "Scenario2Electr"  & Indicateur > 175) %>%
+    arrange(desc(Indicateur))
+
+print(finsel)
+```
+
+Ci-dessus on voit les noms des communes pour les quel `Scenario2Electr` est supérieur à 175. Deux communes du Tessin (TI) s'y retrouvent ce qui n'était pas si évident avec la représentation d'avant.
+
+### 3. Conclusion
+
+Ce travail peut être intéressant pour une entreprise de panneau solaire mandaté par la confédération pour faire des installations dans l'ensemble du pays. Logiquement elle va s'investir là où ses produits seront le plus rentable ce qui se traduit dans ce cas par des communes ayant un haut potentiel énergétique solaire.  
+On remarque qu'il y a donc diverses façons de s'y prendre. D'une part il est intéressant de regarder les cantons individuellement. On a obtenu des résultats qui montrent que le canton entier qui peut-être intéressant est Glaris. D'autre part, si on regarde les communes séparément, on retrouve qu'il y a un du potentiel par-ci et par là, démontré par `finsel`.
